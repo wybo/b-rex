@@ -1,0 +1,640 @@
+#!/usr/bin/env ruby
+# encoding: utf-8
+
+# == Synopsis
+#   Beamer-Ruby-Latex, b-rex in short, is a program for pre-parsing
+#   latex beamer presentations & papers, and building them with
+#   pdflatex and bibtex.
+#
+# == Usage
+#   To turn tex file into pdf
+#     ./b-rex beamer.tex
+#
+#   Other examples:
+#     b-rex -a beamer.tex
+#     b-rex -e --verbose beamer.tex
+#
+# In Presentations
+#
+# Instead of:
+#
+#   \begin{frame}
+#     \frametitle{My Very Title}
+#     bigskip
+#
+#     \begin{itemize}
+#       \item this point people
+#       \item do not forget
+#     \end{itemize}
+#   \end{frame}
+#
+# You can write:
+#
+#   --- My Very Title
+#
+#    * this point people
+#    * do not forget
+#
+#   ---
+#
+# It is capable of falling back to normal latex where needed (for the
+# title-page you still use normal latex) and also has support for
+# slides with an image, tables of contents, an intro-frame and
+# higlighted words (by enclosing them in '~''s, ~like this~)
+#
+# For more info and example presentations see:
+# http://en.logilogi.org/Wybo_Wiersma/User/Beamer_Ruby_Latex
+#
+# == Options
+#   -h, --help          Displays help message
+#   -v, --version       Display the version, then exit
+#   -V, --verbose       Verbose output
+#   -b, --bibclean      Cleans the bibtex file
+#   -a, --assemble      Follows all includes and makes it a single file
+#   -e, --expand        Assembles and expands to normal tex (does not
+#                       turn it into a pdf yet)
+#   -p, --poster-mode   Uses lists with narrower margins, instead of
+#                       latexes 'itemize'
+#   -m, --make          Compiles the latex
+#
+# == Requirements
+#   Ruby (inc rdoc, not included in Debian & Ubuntu, needs ruby and rdoc
+#   packages there), Latex beamer, and a working TeX Live (the texlive
+#   (better texlive-full) and latex-beamer packages are all you need on
+#   Ubuntu)
+#
+# == Copyright
+#   Copyright (c) 2007 The LogiLogi Foundation. Licensed under the
+#   Affero GPL: http://www.fsf.org/licensing/licenses/agpl-3.0.html
+
+require 'optparse'
+require 'ostruct'
+require 'date'
+
+class BRex
+  VERSION = '0.5.3'
+
+  ASSEMBLED_SUFFIX = '.assembled'
+  EXPANDED_SUFFIX = '.expanded'
+  BASE_PATH = '.'
+
+  attr_reader :options
+
+  def initialize(arguments)
+    @arguments = arguments
+
+    # Set defaults
+    @options = OpenStruct.new
+    @options.verbose = false
+    @options.process = false
+    @options.assemble = false
+    @options.expand = false
+    @options.poster = false
+    @options.make = false
+    # more options in preprocess_options
+  end
+
+  # Parse options, check arguments, then process the command
+  def run
+    if parsed_options? && arguments_valid?
+      puts "Start at #{DateTime.now}" if @options.verbose
+
+      output_options if @options.verbose
+      preprocess_options
+      run_app
+
+      puts "Finished at #{DateTime.now}" if @options.verbose
+    else
+      output_help
+    end
+  end
+
+  protected
+
+  def parsed_options?
+    # Specify options
+    @opts = OptionParser.new
+    @opts.on('-v', '--version')     { output_version ; exit 0 }
+    @opts.on('-h', '--help')        { output_help }
+    @opts.on('-V', '--verbose')     { @options.verbose = true }
+    @opts.on('-b', '--bibclean')    { @options.bibclean = true }
+    @opts.on('-a', '--assemble')    { @options.assemble = true }
+    @opts.on('-e', '--expand')      { @options.expand = true }
+    @opts.on('-p', '--poster-mode') { @options.poster = true }
+    @opts.on('-m', '--make')        { @options.make = true }
+
+    @opts.parse!(@arguments) rescue return false
+    @options.file_name = @arguments[0]
+    true
+  end
+
+  def output_options
+    puts "Options:"
+
+    @options.marshal_dump.each do |name, val|
+      puts "  #{name} = #{val}"
+    end
+  end
+
+  # True if required arguments were provided
+  def arguments_valid?
+    if @options.assemble and @options.expand
+      puts "process, assemble and expand are mutually exclusive options"
+      return false
+    end
+    return true
+  end
+
+  def preprocess_options
+    if @options.expand
+      @options.assemble = true
+    elsif !@options.bibclean and !@options.assemble and !@options.make
+      @options.bibclean = @options.assemble = @options.expand =
+          @options.make = true
+    end
+    if @options.poster
+      @options.list_margin = '1.9em'
+      @options.list_squeeze = false
+    end
+  end
+
+  def output_help
+    puts 
+    output_version
+    puts 
+    puts @opts
+    puts 
+    puts "See source for extended documentation"
+    exit 
+  end
+
+  def output_version
+    puts "#{File.basename(__FILE__)} version #{VERSION}"
+  end
+
+  def run_app
+    bibclean(@options.file_name) if @options.bibclean
+    assemble(@options.file_name) if @options.assemble
+    expand(@options.file_name) if @options.expand
+    make(@options.file_name) if @options.make
+  end
+
+  def bibclean(file_name)
+    check_file_name_argument(file_name, 'latex-file or bibtex-file')
+    if file_name !~ /\.tex$/
+      bibtex_file_name = file_name
+    else
+      bibtex_file_name = bibtex_extract_file_name(BASE_PATH, file_name)
+    end
+    if bibtex_file_name
+      contents = bibtex_clean_file(BASE_PATH, bibtex_file_name)
+      File.open(BASE_PATH + '/' + bibtex_file_name, 'w') do |target|
+        target.write(contents)
+      end
+    end
+  end
+
+  def assemble(file_name)
+    check_file_name_argument(file_name, 'latex-file')
+    contents = assemble_text_file(BASE_PATH, file_name)
+    File.open(BASE_PATH + '/' + file_name + ASSEMBLED_SUFFIX, 'w') do |target|
+      target.write(contents)
+    end
+  end
+
+  def expand(file_name)
+    check_file_name_argument(file_name, 'assembled latex-file')
+    contents = File.open(File.expand_path(file_name + ASSEMBLED_SUFFIX, BASE_PATH)).read
+    contents = expand_code(contents)
+    contents = expand_item_lists(contents)
+    contents = expand_frames(contents)
+    contents = expand_styles(contents)
+    File.open(BASE_PATH + '/' + file_name + EXPANDED_SUFFIX + '.tex', 'w') do |target|
+      target.write(contents)
+    end
+    system "cd #{BASE_PATH}; rm #{file_name + ASSEMBLED_SUFFIX}"
+  end
+
+  def make(file_name)
+    check_file_name_argument(file_name, 'latex-file')
+    to_pdf_file = file_name.gsub(/\.tex/,'.pdf')
+    processed_head = file_name + EXPANDED_SUFFIX
+    ["pdflatex '#{processed_head}'",
+     "bibtex '#{processed_head}'",
+     "pdflatex '#{processed_head}'",
+     "pdflatex '#{processed_head}'",
+     "mv '#{processed_head}.pdf' '#{to_pdf_file}'",
+     "rm -f '#{processed_head}'.*",
+     "rm -f '#{processed_head}-blx'.*"
+     ].each do |action|
+      system "cd #{BASE_PATH}; #{action}"
+    end
+  end
+
+  # Sub-sub-functions
+
+  def bibtex_extract_file_name(base_path, file_name)
+    contents = File.open(File.expand_path(file_name, base_path)).read
+    contents =~ /(^|\n)[ \t]*\\bibliography\{(.*?)\}(\n|$)/
+    match = $~
+    if match
+      return match[2] + '.bib'
+    else
+      return nil
+    end
+  end
+
+  def bibtex_clean_file(base_path, file_name)
+    contents = File.open(File.expand_path(file_name, base_path)).read
+    lines = contents.split("\n")
+    new_lines = []
+    misc_type = false
+    lines.collect! do |line|
+      if line =~ /\@misc.*/
+        misc_type = true
+      elsif line =~ /\@.*/
+        misc_type = false
+      end
+      if line !~ /^[ \t]*howpublished\s*=\s*\{.*$/ and
+          line !~ /^[ \t]*shorttitle\s*=\s*\{.*$/ and
+          line !~ /^[ \t]*isbn\s*=\s*\{.*$/ and
+          line !~ /^[ \t]*abstract\s*=\s*\{.*$/ and
+          line !~ /^[ \t]*doi\s*=\s*\{.*$/ and
+          line !~ /^[ \t]*issn\s*=\s*\{.*$/ and
+          line !~ /^[ \t]*number\s*=\s*\{.*$/ and
+          line !~ /^[ \t]*note\s*=\s*\{.*$/ and
+          line !~ /^[ \t]*language\s*=\s*\{.*$/ and
+          line !~ /^[ \t]*edition\s*=\s*\{.*$/ and
+          (misc_type || line !~ /^[ \t]*urldate\s*=\s*\{.*$/) and
+          (misc_type || line !~ /^[ \t]*url\s*=\s*\{.*$/)
+        line.gsub!("ñ","n")
+        line.gsub!("á","a")
+        line.gsub!("ä","a")
+        line.gsub!("é","e")
+        line.gsub!("ó","o")
+        line.gsub!("–",'--')
+        line.gsub!("“",'``')
+        line.gsub!("”","''")
+        line.gsub!("’","'")
+        if line =~ /^[ \t]*pages\s*=\s*\{p(\d*)\}/
+          new_lines << "  pages = {#{$~[1]}}"
+        else
+          new_lines << line
+        end
+      end
+    end
+    return new_lines.join("\n")
+  end
+
+  def assemble_text_file(base_path, file_name)
+    if !File.directory?(base_path)
+      base_path = File.dirname(base_path)
+    end
+    contents = File.open(File.expand_path(file_name, base_path)).read
+    contents.gsub!(/(^|\n)[ \t]*\\input\{.*?\}(\n|$)/) do |inc|
+      inc =~ /input\{(.*?)\}/
+      match = $~
+      assemble_text_file(base_path + '/' + file_name, match[1])
+    end
+    return contents
+  end
+
+  def expand_code(contents)
+    lines = contents.split("\n")
+    lines.collect! do |line|
+      if line =~ /^(\s*)%b-r-c(=|)\s(.+)/
+        match = $~
+        code = match[3]
+        if match[2] and !match[2].empty?
+          line = eval code
+        else
+          eval code
+          line = ''
+        end
+      else
+        line
+      end
+    end
+    return lines.join("\n")
+  end
+
+  NESTING_TYPES = {'*' => 'itemize', '#' => 'enumerate'}
+
+  def expand_item_lists(contents)
+    lines = contents.split("\n")
+    # Item-lists
+    whitespaces_in_line = 0
+    whitespaces_in_last_line = 0
+    item_nestings = []
+    nr = 0
+    lines.collect! do |line|
+      line_begin = ''
+      if line =~ /^(\s*)(\*|#)(.+)/
+        match = $~
+        line = match[3]
+        whitespaces_in_line = match[1].size
+        if whitespaces_in_line > whitespaces_in_last_line
+          nesting = NESTING_TYPES[match[2]]
+          if nesting == "itemize" and self.options.poster
+            nesting = "list"
+            line_begin += ' ' * whitespaces_in_line + '\begin{' + nesting + '}{\labelitemi}{\leftmargin=' + self.options.list_margin + '}' + "\n"
+            if self.options.list_squeeze
+              line_begin += '\setlength{\itemsep}{0pt}' + "\n" +
+                            '\setlength{\parskip}{0pt}' + "\n" +
+                            '\setlength{\parsep}{0pt}' + "\n"
+            end
+          else
+            line_begin += ' ' * whitespaces_in_line + '\begin{' + nesting + '}' + "\n"
+          end
+          item_nestings.push(nesting)
+        elsif whitespaces_in_line < whitespaces_in_last_line and
+            item_nestings.size > 0
+          nesting = item_nestings.pop
+          line_begin += ' ' * whitespaces_in_last_line + '\end{' + nesting + '}' + "\n"
+        end
+        line_begin += ' ' * (whitespaces_in_line + 2) + '\item'
+      else
+        if item_nestings.size > 0
+          item_nestings.reverse.each do |nesting|
+            line_begin += ' ' * whitespaces_in_last_line + '\end{' + nesting + '}' + "\n"
+            whitespaces_in_last_line = step_down_whitespaces(whitespaces_in_last_line)
+          end
+          line_begin += '\vspace{0.5em}' + "\n"
+        elsif whitespaces_in_last_line > 0
+          raise 'Problem closing nesting on line ' + nr.to_s + ' of the composed file'
+        end
+        item_nestings = []
+        whitespaces_in_line = 0
+      end
+      whitespaces_in_last_line = whitespaces_in_line
+      nr += 1
+      line_begin + line
+    end
+    return lines.join("\n")
+  end
+
+  def expand_frames(contents)
+    lines = contents.split("\n")
+
+    new_lines = []
+    open = false
+    lines.each do |line|
+      #if line =~ /^\s*---\=\=\=\s*(.*)\s*$/
+      if line =~ /^\s*---\=\=\=(\[(.*)\])?\s*(.*)\s*$/
+        match = $~
+        lasttitle = match[3] || match[2]
+        title = match[2] || match[3]
+        if open
+          new_lines << '---'
+        end
+        new_lines << ''
+        new_lines << '\section{' + title + '}'
+        new_lines << '\stepcounter{subsection}'
+        new_lines << ''
+        new_lines << '--- ' + lasttitle
+      else
+        new_lines << line
+      end
+      if line =~ /^\s*---\s*$/
+        open = false
+      elsif line =~ /^\s*---(.*)$/
+        open = true
+      end
+    end
+    lines = new_lines
+
+    new_lines = []
+    # Frames + titles
+    open = false
+    old_fun_str = ""
+    old_arg_str = ""
+    ex_gobble = []
+    ex_run_frame = false
+    ex_gobbling = false
+    img_counter = 0
+    lines.each do |line|
+      if line =~ /^\s*---(\|?)([-\w]*)\s*(.*)\s*$/
+        match = $~
+        if !match[1].empty?
+          ex_run_frame = true
+          fun_str = (!match[2].empty? ? match[2] : "t-gv img" + img_counter.to_s)
+          img_counter += 1
+        else
+          ex_run_frame = false
+          fun_str = "frame_" + (!match[2].empty? ? match[2] : "default")
+        end
+        arg_str = match[3]
+        if !arg_str.empty?
+          if fun_str == "frame_default"
+            # add quotes to the title
+            arg_str = '"' + arg_str + '"'
+          end
+          if !ex_run_frame
+            arg_str += ", "
+          end
+        end
+        if open
+          # close it with the previous args
+          if ex_gobbling
+            f = IO.popen(old_fun_str + ' ' + old_arg_str, "r+")
+            f.print ex_gobble.join("\n")
+            f.close_write
+            new_lines << f.readlines.join()
+            ex_gobble = []
+          else
+            self.check_frame_function(old_fun_str)
+            new_lines << eval(old_fun_str + "(" + old_arg_str + ":open => false)")
+          end
+          open = false
+        else
+          if !ex_run_frame
+            # open a new one
+            self.check_frame_function(fun_str)
+            new_lines << eval(fun_str + "(" + arg_str + ":open => true)")
+          end
+          open = true
+        end
+        if !open
+          # open again when chained
+          if ex_run_frame
+            open = true
+          elsif !arg_str.empty?
+            new_lines << ("\n" +
+                eval(fun_str + "(" + arg_str + ":open => true)"))
+            open = true
+          end
+        end
+        old_fun_str = fun_str
+        old_arg_str = arg_str
+        if open and ex_run_frame
+          ex_gobbling = true
+        else
+          ex_gobbling = false
+        end
+      elsif ex_gobbling
+        ex_gobble << line
+      else
+        if open and !line.empty?
+          # extra indentation
+          line = '  ' + line
+        end
+        new_lines << line
+      end
+    end
+    if open
+      raise 'Frames not closed'
+    end
+    return new_lines.join("\n")
+  end
+
+  def check_frame_function(fun_str)
+    if !self.methods.include?(fun_str.to_sym)
+      raise "Frame kind '#{fun_str}' does not exist, leave a space between --- <and the title>"
+    end
+  end
+
+  def expand_styles(contents)
+    if @options.poster
+      top_spacing = '-0.2em'
+    else
+      top_spacing = '0.0em'
+    end
+    lines = contents.split("\n")
+    # Yellow words
+    lines.collect! do |line|
+      done_line_sub = false
+      begin
+        subbed = false
+        subbed = line.sub!(/~((-|\w|\s)*?)~\{(.*?)\}/) {|match|
+              self.highlight($1, $3)
+            }
+        if !subbed
+          if done_line_sub
+            subbed = line.sub!(/~(.*?)~/) {|match|
+                  self.highlight($1, top_spacing, '0.0em')
+                }
+          else
+            subbed = line.sub!(/~(.*?)~/) {|match|
+                  self.highlight($1, top_spacing, top_spacing)
+                }
+          end
+        end
+        done_line_sub = (subbed ? true : false)
+      end while subbed
+      line
+    end
+    return lines.join("\n")
+  end
+
+  def highlight(sentence, top_spacing, bottom_spacing)
+    return '\vspace{' + top_spacing + '}' +
+        '\colorbox[cmyk]{0,0,0.4,0.0}{\hspace{-3pt}' +
+        sentence + '\hspace{-3pt}}\vspace{' + bottom_spacing + '}'
+  end
+
+  def frame_default(title, options = {})
+    if options[:open]
+      '\begin{frame}[fragile]' + "\n" +
+      '  \frametitle{' + title + '}' + "\n" +
+      '  \bigskip'
+    else
+      '\end{frame}'
+    end
+  end
+
+  def frame_intro(options = {})
+    if options[:open]
+      '\begin{frame}[plain]' + "\n" +
+      '\vspace{8mm}' + "\n" +
+      '  \begin{columns}' + "\n" +
+      '    \column{15mm}' + "\n" +
+      '    \column{8cm}'
+    else
+      '  \end{columns}' + "\n" +
+      '\end{frame}'
+    end
+  end
+
+  def frame_contents(title, options = {})
+    if options[:open]
+      '\begin{frame}[fragile]' + "\n" +
+      '  \frametitle{' + title + '}'
+    else
+      '  \tableofcontents[currentsection, hideothersubsections]' + "\n" +
+      '\end{frame}'
+    end
+  end
+
+  def frame_image(image, title, options = {})
+    if options[:open]
+      '\begin{frame}' + "\n" +
+      '  \frametitle{' + title + '}'
+    else
+      if options[:max].kind_of?(Hash)
+        key = options[:max].keys.first
+        limit = key.to_s + '=' + options[:max][key]
+      elsif options[:max] == :width
+        limit = "width=10cm"
+      else
+        limit = "height=6.2cm"
+      end
+      '  \hspace{0.3cm}' +
+      '  \begin{figure}' + "\n" +
+      '    \centering' + "\n" +
+      '    \includegraphics[' + limit + ']{' + image + '}' + "\n" +
+      '  \end{figure}' + "\n" +
+      '\end{frame}'
+    end
+  end
+
+  def frame_h(title, options = {})
+    if options[:open]
+      options.delete(:open)
+      @hstack ||= []
+      if options[:column]
+        @hcolumn = options[:column]
+        options.delete(:column)
+      else
+        @hcolumn ||= 0 # sets to zero if unset, only on first call
+      end
+      pass_options = ",column=" + @hcolumn.to_s
+      @hstack[@hcolumn] ||= []
+      if !options[:below] and !options[:above]
+        if !@hstack[@hcolumn].empty?
+          pass_options += ",below=" + @hstack[@hcolumn].last
+        else
+          pass_options += ",row=0"
+        end
+      end
+      if !options.empty?
+        options.each_pair do |key, value|
+          pass_options += ',' + key.to_s + '=' + value.to_s
+        end
+      end
+
+      name = title.downcase.gsub(/\s|\./,'-')
+      @hstack[@hcolumn] << name
+      '  \headerbox{' + title + '}{name=' + name + pass_options + '}{'
+    else
+      '  \vspace{-0.1em}' + "\n" +
+      '  }'
+    end
+  end
+
+  def step_down_whitespaces(whitespaces)
+    whitespaces -= 2 if whitespaces >= 2
+    return whitespaces
+  end
+
+  def check_file_name_argument(file_name, file_text)
+    if file_name.nil? or !File.exists?(file_name)
+      puts "Needs file_name-argument for a file that exists. The name of the #{file_text}\n"
+      output_help
+      exit
+    end
+  end
+end
+
+# Create and run the application
+br = BRex.new(ARGV)
+br.run
