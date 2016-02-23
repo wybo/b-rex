@@ -6,12 +6,12 @@ Beamer-Ruby-Latex, b-rex in short, is a program for pre-parsing latex beamer pre
 
 To turn tex file into pdf
 
-  ./b-rex beamer.tex
+    ./b-rex beamer.tex
 
 Other examples:
   
-  b-rex -a beamer.tex
-  b-rex -e --verbose beamer.tex
+    b-rex -a beamer.tex
+    b-rex -e --verbose beamer.tex
 
 #### In Presentations
 
