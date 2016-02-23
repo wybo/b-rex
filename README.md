@@ -17,24 +17,24 @@ Other examples:
 
 Instead of:
 
-   \begin{frame}
-     \frametitle{My Very Title}
-     bigskip
+      \begin{frame}
+        \frametitle{My Very Title}
+        bigskip
 
-     \begin{itemize}
-       \item this point people
-       \item do not forget
-     \end{itemize}
-   \end{frame}
+        \begin{itemize}
+          \item this point people
+          \item do not forget
+        \end{itemize}
+      \end{frame}
 
  You can write:
   
-  --- My Very Title
+      --- My Very Title
   
-    * this point people
-    * do not forget
+        * this point people
+        * do not forget
   
-  ---
+      ---
 
 It is capable of falling back to normal latex where needed (for the title-page you still use normal latex) and also has support for slides with an image, tables of contents, an intro-frame and higlighted words (by enclosing them in '~''s, ~like this~)
 
