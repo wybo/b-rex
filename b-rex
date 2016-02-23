@@ -42,8 +42,8 @@
 # slides with an image, tables of contents, an intro-frame and
 # higlighted words (by enclosing them in '~''s, ~like this~)
 #
-# For more info and example presentations see:
-# http://en.logilogi.org/Wybo_Wiersma/User/Beamer_Ruby_Latex
+# For more info, run with the -h option, and for the latest source 
+# code see: https://github.com/wybo/b-rex
 #
 # == Options
 #   -h, --help          Displays help message
@@ -64,7 +64,7 @@
 #   Ubuntu)
 #
 # == Copyright
-#   Copyright (c) 2007 The LogiLogi Foundation. Licensed under the
+#   Copyright (c) 2007-2016 Wybo Wiersma. Licensed under the
 #   Affero GPL: http://www.fsf.org/licensing/licenses/agpl-3.0.html
 
 require 'optparse'
